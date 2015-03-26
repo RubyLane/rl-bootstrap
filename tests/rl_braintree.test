@@ -1,0 +1,1162 @@
+package require Tcl 8.6
+
+# tcl::tm::path add [file dirname [file dirname [file normalize [info script]]]]
+
+package require rl_braintree
+
+# Update these variables with your test credentials
+set merchant_id           "your_merchant_id"
+set merchant_account_id   "your_merchant_account_id"
+set public_key            "your_public_key"
+set private_key           "your_private_key"
+
+# Braintree Defined test values for merchant accounts
+# https://developers.braintreepayments.com/javascript+ruby/reference/general/testing#test-values-for-merchant-accounts
+
+# Example of merchant data fields <<<
+set canned_merchant_data [subst {
+    individual {
+        first_name              "Jane"
+        last_name               "Doe"
+        email                   "jane@14ladders.com"
+        date_of_birth           "1981-11-19"
+        address {
+            street_address      "111 Main St"
+            locality            "Chicago"
+            region              "IL"
+            postal_code         "60622"
+        }
+    }
+    business {
+        legal_name              "Jane's Ladders"
+        dba_name                "Jane's Ladders"
+        tax_id                  "98-7654321"
+        address {
+            street_address      "111 Main St"
+            locality            "Chicago"
+            region              "IL"
+            postal_code         "60622"
+        }
+    }
+    funding {
+        descriptor              "Blue Ladders"
+        destination             "bank"
+        email                   "funding@blueladders.com"
+        modible_phone           "5555555555"
+        account_number          "1123581321"
+        routing_number          "071101307"
+    }
+    tos_accepted                true
+    master_merchant_account_id  $::merchant_account_id
+    id                          "blue_ladders_store"
+}]
+# Example of merchant data fields >>>
+# Example of transaction data fields <<<
+set canned_transaction_data [subst {
+    amount                      "100.00"
+    order_id                    "order_id"
+    merchant_account_id         "fakeuseridB"
+    service_fee_amount          "3.00"
+    payment_method_nonce        "nonce_from_the_client"
+    customer {
+        first_name              "Drew"
+        last_name               "Smith"
+        company                 "Braintree"
+        phone                   "312-555-1234"
+        website                 "http://www.example.com"
+        email                   "drew@example.com"
+    }
+    billing {
+        first_name              "Paul"
+        last_name               "Smith"
+        company                 "Braintree"
+        street_address          "1 E Main St"
+        extended_address        "Suite 403"
+        locaility               "Chicago"
+        region                  "IL"
+        postal_code             "60622"
+        country_code_alpha2     "US"
+    }
+    shipping {
+        first_name              "Jen"
+        last_name               "Smith"
+        company                 "Braintree"
+        street_address          "1 E 1st St"
+        extended_address        "Suite 403"
+        locaility               "Bartlett"
+        region                  "IL"
+        postal_code             "60103"
+        country_code_alpha2     "US"
+    }
+    options {
+        sibmit_for_settlement   true
+    }
+    channel                     "MyShoppingCartProvider"
+    custom_fields {
+        custom_field_one        "Must be configured via Braintree Control Panel beforehand"
+    }
+}]
+# Example of transaction data fields >>>
+
+# Currently this is only looking at the requirements for Braintree's MarketPlace
+# https://developers.braintreepayments.com/javascript+ruby/guides/marketplace/overview
+
+proc cleanup {} {
+	if {[info object isa object bt]} {bt destroy}
+}
+
+::rltest::test rl_braintree-1.1 {It should initialize with merchant credentials} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -merchant_id $::merchant_id \
+        -public_key $::public_key \
+        -private_key $::private_key
+    set res [bt config_key merchant_id]
+} -cleanup {
+    cleanup
+} -result $merchant_id
+
+#>>>
+::rltest::test rl_braintree-1.2 {It should throw an error if initialized without public_key} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -merchant_id $::merchant_id \
+        -private_key $::private_key
+} -cleanup {
+    cleanup
+} -result "Must set -public_key" -returnCodes error
+
+# #>>>
+::rltest::test rl_braintree-1.3 {It should throw an error if initialized without private_key} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -merchant_id $::merchant_id \
+        -public_key $::public_key
+} -cleanup {
+    cleanup
+} -result "Must set -private_key" -returnCodes error
+
+# #>>>
+::rltest::test rl_braintree-1.4 {It should throw an error if initialized without merchant id} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -public_key $::public_key \
+        -private_key $::private_key
+} -cleanup {
+    cleanup
+} -result "Must set -merchant_id" -returnCodes error
+
+# #>>>
+::rltest::test rl_braintree-1.5 {It should return the base merchant path} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -merchant_id $::merchant_id \
+        -public_key $::public_key \
+        -private_key $::private_key
+    set res [bt base_merchant_path]
+} -cleanup {
+    cleanup
+} -result [file join "merchants" $merchant_id] 
+
+# #>>>
+::rltest::test rl_braintree-1.6 {It should return a client token} -body { #<<<
+    rl_braintree create bt \
+        -sandbox 1 \
+        -merchant_id $::merchant_id \
+        -public_key $::public_key \
+        -private_key $::private_key
+    set res [expr {[bt generate_client_token] ne ""}]
+} -cleanup {
+    cleanup
+} -result 1
+
+# #>>>
+::rltest::test rl_braintree-1.7 {It should create a new sub merchant for an individual} -body { #<<<
+    set res ""
+    set base_data [dict remove $::canned_merchant_data business]
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            # Canned response from Braintree <<<
+            set res [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <merchant-account>
+                    <status>pending</status>
+                    <id>fakeuseridA</id>
+                    <master-merchant-account>
+                        <status>active</status>
+                        <id>$::merchant_account_id</id>
+                        <currency-iso-code>USD</currency-iso-code>
+                        <sub-merchant-account type="boolean">false</sub-merchant-account>
+                    </master-merchant-account>
+                    <currency-iso-code>USD</currency-iso-code>
+                    <sub-merchant-account type="boolean">true</sub-merchant-account>
+                </merchant-account>
+			}]
+            # Canned response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set resp [bt merchant_account create $base_data]
+        if {[dict exists $resp status]} {
+            set res [dict get $resp status]
+        }
+    }
+} -cleanup {
+    cleanup
+} -result pending
+
+#>>>
+::rltest::test rl_braintree-1.8 {It should create a new sub merchant account for a business} -body { #<<<
+    set res ""
+    set base_data [dict merge {} $::canned_merchant_data]
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            # Canned successful response from Braintree <<<
+            set res [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <merchant-account>
+                    <status>pending</status>
+                    <id>fakeuseridA</id>
+                    <master-merchant-account>
+                        <status>active</status>
+                        <id>$::merchant_account_id</id>
+                        <currency-iso-code>USD</currency-iso-code>
+                        <sub-merchant-account type="boolean">false</sub-merchant-account>
+                    </master-merchant-account>
+                    <currency-iso-code>USD</currency-iso-code>
+                    <sub-merchant-account type="boolean">true</sub-merchant-account>
+                </merchant-account>
+			}]
+            # Canned successful response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set resp [bt merchant_account create $base_data]
+        if {[dict exists $resp status]} {
+            set res [dict get $resp status]
+        }
+    }
+} -cleanup {
+    cleanup
+} -result pending
+
+#>>>
+::rltest::test rl_braintree-1.9 {It should raise an error if first_name is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual first_name
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set res [bt merchant_account create $base_data]
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"first_name\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.10 {It should raise an error if last_name is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual last_name
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"last_name\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.11 {It should raise an error if individual email is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual email
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"email\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.12 {It should raise an error if individual date_of_birth is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual date_of_birth
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"date_of_birth\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.13 {It should raise an error if individual address is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual address
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"address\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.14 {It should raise an error if individual address, street_address is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual address street_address
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"street_address\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.15 {It should raise an error if individual address, locality is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual address locality
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"locality\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.16 {It should raise an error if individual address, region is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual address region
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"region\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.17 {It should raise an error if individual address, postal_code is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data individual address postal_code
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"postal_code\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.18 {It should raise an error if legal_name is missing for a business} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data business legal_name
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"legal_name\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.19 {It should raise an error if tax_id is missing for a business} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data business tax_id
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"tax_id\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.20 {It should raise an error if funding destination is missing} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data funding destination
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"destination\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.21 {It should raise an error if funding account_number is missing, when destination is bank} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data funding account_number
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"account_number\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.22 {It should raise an error if funding routing_number is missing, when destination is bank} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict unset base_data funding routing_number
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"routing_number\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.23 {It should raise an error if funding email is missing, when destination is email} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict set base_data funding destination email
+    dict unset base_data funding email
+
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"email\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.24 {It should raise an error if funding mobile_phone is missing, when destination is mobile_phone} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict set base_data funding destination mobile_phone
+    dict unset base_data funding mobile_phone
+
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+            set res ""
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        bt merchant_account create $base_data
+    }
+} -cleanup {
+    cleanup
+} -result "Problem formatting xml query: key \"mobile_phone\" not known in dictionary" -returnCodes error
+
+#>>>
+::rltest::test rl_braintree-1.25 {It should find an existing merchant} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict set base_data id "fakeuseridB"
+
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+			# Canned response from Braintree <<<
+            return [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <merchant-account>
+                    <id>fakeuseridB</id>
+                    <status>active</status>
+                    <master-merchant-account>
+                        <status>active</status>
+                        <id>$::merchant_account_id</id>
+                        <currency-iso-code>USD</currency-iso-code>
+                        <sub-merchant-account type="boolean">false</sub-merchant-account>
+                    </master-merchant-account>
+                    <individual>
+                        <date-of-birth>1981-11-19</date-of-birth>
+                        <ssn-last-4>4567</ssn-last-4>
+                        <first-name>Jane</first-name>
+                        <last-name>Doe</last-name>
+                        <email>jane@14ladders.com</email>
+                        <phone>5553334444</phone>
+                        <address>
+                            <street-address>111 Main St</street-address>
+                            <locality>Chicago</locality>
+                            <region>IL</region>
+                            <postal-code>60622</postal-code>
+                        </address>
+                    </individual>
+                    <business>
+                        <legal-name nil="true"/>
+                        <dba-name nil="true"/>
+                        <tax-id nil="true"/>
+                        <address>
+                            <street-address nil="true"/>
+                            <locality nil="true"/>
+                            <region nil="true"/>
+                            <postal-code nil="true"/>
+                        </address>
+                    </business>
+                    <funding>
+                        <account-number-last-4>6543</account-number-last-4>
+                        <routing-number>071101307</routing-number>
+                        <destination>bank</destination>
+                        <email nil="true"/>
+                        <mobile-phone nil="true"/>
+                        <descriptor>Bob Smith</descriptor>
+                    </funding>
+                </merchant-account>
+            }]
+			# Canned response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set res [expr {[bt merchant_account find $base_data] ne ""}]
+    }
+} -cleanup {
+    cleanup
+} -result 1
+
+#>>>
+::rltest::test rl_braintree-1.26 {It should update an existing merchant} -body { #<<<
+    set base_data [dict merge {} $::canned_merchant_data]
+    dict set base_data id "fakeuseridB"
+    dict unset base_data business
+    dict set base_data individual first_name "Foo"
+
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+			# Canned response from Braintree <<<
+            return [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <merchant-account>
+                    <id>fakeuseridB</id>
+                    <status>active</status>
+                    <master-merchant-account>
+                        <status>active</status>
+                        <id>$::merchant_account_id</id>
+                        <currency-iso-code>USD</currency-iso-code>
+                        <sub-merchant-account type="boolean">false</sub-merchant-account>
+                    </master-merchant-account>
+                    <individual>
+                        <date-of-birth>1981-11-19</date-of-birth>
+                        <ssn-last-4>4567</ssn-last-4>
+                        <first-name>Foo</first-name>
+                        <last-name>Doe</last-name>
+                        <email>jane@14ladders.com</email>
+                        <phone>5553334444</phone>
+                        <address>
+                            <street-address>111 Main St</street-address>
+                            <locality>Chicago</locality>
+                            <region>IL</region>
+                            <postal-code>60622</postal-code>
+                        </address>
+                    </individual>
+                    <business>
+                        <legal-name nil="true"/>
+                        <dba-name nil="true"/>
+                        <tax-id nil="true"/>
+                        <address>
+                            <street-address nil="true"/>
+                            <locality nil="true"/>
+                            <region nil="true"/>
+                            <postal-code nil="true"/>
+                        </address>
+                    </business>
+                    <funding>
+                        <account-number-last-4>1321</account-number-last-4>
+                        <routing-number>071101307</routing-number>
+                        <destination>bank</destination>
+                        <email nil="true"/>
+                        <mobile-phone nil="true"/>
+                        <descriptor>Blue Ladders</descriptor>
+                    </funding>
+                </merchant-account>
+            }]
+			# Canned response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set resp [bt merchant_account update $base_data]
+        if {[dict exists $resp individual first-name]} {
+            set res [dict get $resp individual first-name]
+        }
+    }
+} -cleanup {
+    cleanup
+} -result "Foo"
+
+#>>>
+::rltest::test rl_braintree-1.27 {It should create a transaction} -body { #<<<
+    set base_data [dict merge {} $::canned_transaction_data]
+    dict unset base_data custom_fields
+    dict set base_data payment_method_nonce "fake-valid-nonce"
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+			# Canned response from Braintree <<<
+            return [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <transaction>
+                  <id>hxdfty</id>
+                  <status>submitted_for_settlement</status>
+                  <type>sale</type>
+                  <currency-iso-code>USD</currency-iso-code>
+                  <amount>100.00</amount>
+                  <merchant-account-id>fakeuseridB</merchant-account-id>
+                  <order-id>order_id</order-id>
+                  <created-at type="datetime">2015-03-25T23:48:26Z</created-at>
+                  <updated-at type="datetime">2015-03-25T23:48:26Z</updated-at>
+                  <customer>
+                    <id nil="true"/>
+                    <first-name>Drew</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <email>drew@example.com</email>
+                    <website>http://www.example.com</website>
+                    <phone>312-555-1234</phone>
+                    <fax nil="true"/>
+                  </customer>
+                  <billing>
+                    <id nil="true"/>
+                    <first-name>Paul</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <street-address>1 E Main St</street-address>
+                    <extended-address>Suite 403</extended-address>
+                    <locality nil="true"/>
+                    <region>IL</region>
+                    <postal-code>60622</postal-code>
+                    <country-name>United States of America</country-name>
+                    <country-code-alpha2>US</country-code-alpha2>
+                    <country-code-alpha3>USA</country-code-alpha3>
+                    <country-code-numeric>840</country-code-numeric>
+                  </billing>
+                  <refund-id nil="true"/>
+                  <refund-ids type="array"/>
+                  <refunded-transaction-id nil="true"/>
+                  <settlement-batch-id nil="true"/>
+                  <shipping>
+                    <id nil="true"/>
+                    <first-name>Jen</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <street-address>1 E 1st St</street-address>
+                    <extended-address>Suite 403</extended-address>
+                    <locality nil="true"/>
+                    <region>IL</region>
+                    <postal-code>60103</postal-code>
+                    <country-name>United States of America</country-name>
+                    <country-code-alpha2>US</country-code-alpha2>
+                    <country-code-alpha3>USA</country-code-alpha3>
+                    <country-code-numeric>840</country-code-numeric>
+                  </shipping>
+                  <custom-fields/>
+                  <avs-error-response-code nil="true"/>
+                  <avs-postal-code-response-code>M</avs-postal-code-response-code>
+                  <avs-street-address-response-code>M</avs-street-address-response-code>
+                  <cvv-response-code>M</cvv-response-code>
+                  <gateway-rejection-reason nil="true"/>
+                  <processor-authorization-code>45QGYL</processor-authorization-code>
+                  <processor-response-code>1000</processor-response-code>
+                  <processor-response-text>Approved</processor-response-text>
+                  <additional-processor-response nil="true"/>
+                  <voice-referral-number nil="true"/>
+                  <purchase-order-number nil="true"/>
+                  <tax-amount nil="true"/>
+                  <tax-exempt type="boolean">false</tax-exempt>
+                  <credit-card>
+                    <token nil="true"/>
+                    <bin>401288</bin>
+                    <last-4>1881</last-4>
+                    <card-type>Visa</card-type>
+                    <expiration-month>12</expiration-month>
+                    <expiration-year>2020</expiration-year>
+                    <customer-location>US</customer-location>
+                    <cardholder-name nil="true"/>
+                    <image-url>https://assets.braintreegateway.com/payment_method_logo/visa.png?environment=sandbox</image-url>
+                    <unique-number-identifier nil="true"/>
+                    <prepaid>No</prepaid>
+                    <healthcare>Unknown</healthcare>
+                    <debit>Unknown</debit>
+                    <durbin-regulated>Unknown</durbin-regulated>
+                    <commercial>Unknown</commercial>
+                    <payroll>Unknown</payroll>
+                    <issuing-bank>Unknown</issuing-bank>
+                    <country-of-issuance>USA</country-of-issuance>
+                    <product-id>Unknown</product-id>
+                    <venmo-sdk type="boolean">false</venmo-sdk>
+                  </credit-card>
+                  <status-history type="array">
+                    <status-event>
+                      <timestamp type="datetime">2015-03-25T23:48:26Z</timestamp>
+                      <status>authorized</status>
+                      <amount>100.00</amount>
+                      <user>rubylanenicci</user>
+                      <transaction-source>api</transaction-source>
+                    </status-event>
+                    <status-event>
+                      <timestamp type="datetime">2015-03-25T23:48:26Z</timestamp>
+                      <status>submitted_for_settlement</status>
+                      <amount>100.00</amount>
+                      <user>rubylanenicci</user>
+                      <transaction-source>api</transaction-source>
+                    </status-event>
+                  </status-history>
+                  <plan-id nil="true"/>
+                  <subscription-id nil="true"/>
+                  <subscription>
+                    <billing-period-end-date nil="true"/>
+                    <billing-period-start-date nil="true"/>
+                  </subscription>
+                  <add-ons type="array"/>
+                  <discounts type="array"/>
+                  <descriptor>
+                    <name nil="true"/>
+                    <phone nil="true"/>
+                    <url nil="true"/>
+                  </descriptor>
+                  <recurring type="boolean">false</recurring>
+                  <channel>MyShoppingCartProvider</channel>
+                  <service-fee-amount>3.00</service-fee-amount>
+                  <escrow-status nil="true"/>
+                  <disbursement-details>
+                    <disbursement-date nil="true"/>
+                    <settlement-amount nil="true"/>
+                    <settlement-currency-iso-code nil="true"/>
+                    <settlement-currency-exchange-rate nil="true"/>
+                    <funds-held nil="true"/>
+                    <success nil="true"/>
+                  </disbursement-details>
+                  <disputes type="array"/>
+                  <payment-instrument-type>credit_card</payment-instrument-type>
+                  <processor-settlement-response-code></processor-settlement-response-code>
+                  <processor-settlement-response-text></processor-settlement-response-text>
+                </transaction>
+            }]
+			# Canned response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set res [dict get [bt transaction sale $base_data] status]
+    }
+} -cleanup {
+    cleanup
+} -result submitted_for_settlement
+
+#>>>
+::rltest::test rl_braintree-1.28 {It should reject a transaction with a duplicated payment nonce} -body { #<<<
+    set base_data [dict merge {} $::canned_transaction_data]
+    dict unset base_data custom_fields
+    dict set base_data payment_method_nonce "fake-consumed-nonce"
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+			# Canned response from Braintree <<<
+            return [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <api-error-response>
+                  <errors>
+                    <errors type="array"/>
+                    <transaction>
+                      <errors type="array">
+                        <error>
+                          <code>91564</code>
+                          <attribute type="symbol">payment_method_nonce</attribute>
+                          <message>Cannot use a payment_method_nonce more than once.</message>
+                        </error>
+                      </errors>
+                      <billing>
+                        <errors type="array"/>
+                      </billing>
+                      <customer>
+                        <errors type="array"/>
+                      </customer>
+                      <shipping>
+                        <errors type="array"/>
+                      </shipping>
+                    </transaction>
+                  </errors>
+                  <params>
+                    <transaction>
+                      <type>sale</type>
+                      <merchant-account-id>fakeuseridB</merchant-account-id>
+                      <amount>100.00</amount>
+                      <payment-method-nonce>fake-consumed-nonce</payment-method-nonce>
+                      <service-fee-amount>3.00</service-fee-amount>
+                      <order-id>order_id</order-id>
+                      <customer>
+                        <first-name>Drew</first-name>
+                        <last-name>Smith</last-name>
+                        <company>Braintree</company>
+                        <phone>312-555-1234</phone>
+                        <website>http://www.example.com</website>
+                        <email>drew@example.com</email>
+                      </customer>
+                      <billing>
+                        <first-name>Paul</first-name>
+                        <last-name>Smith</last-name>
+                        <company>Braintree</company>
+                        <street-address>1 E Main St</street-address>
+                        <extended-address>Suite 403</extended-address>
+                        <region>IL</region>
+                        <postal-code>60622</postal-code>
+                        <country-code-alpha2>US</country-code-alpha2>
+                      </billing>
+                      <shipping>
+                        <first-name>Jen</first-name>
+                        <last-name>Smith</last-name>
+                        <company>Braintree</company>
+                        <street-address>1 E 1st St</street-address>
+                        <extended-address>Suite 403</extended-address>
+                        <region>IL</region>
+                        <postal-code>60103</postal-code>
+                        <country-code-alpha2>US</country-code-alpha2>
+                      </shipping>
+                      <channel>MyShoppingCartProvider</channel>
+                      <options>
+                        <submit-for-settlement>true</submit-for-settlement>
+                      </options>
+                    </transaction>
+                  </params>
+                  <message>Cannot use a payment_method_nonce more than once.</message>
+                </api-error-response>
+            }]
+			# Canned response from Braintree >>>
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+        
+        set res [dict get [bt transaction sale $base_data] message]
+    }
+} -cleanup {
+    cleanup
+} -result "Cannot use a payment_method_nonce more than once."
+
+#>>>
+::rltest::test rl_braintree-1.29 {It should return the details of en existing transacion} -body { #<<<
+    set base_data [dict create id "hxdfty"]
+    ::rltest::stub_methods rl_braintree {
+        {rl_braintree _send_request} { {type POST} } {
+			# Canned response from Braintree <<<
+            return [subst {
+                <?xml version="1.0" encoding="UTF-8"?>
+                <transaction>
+                  <id>hxdfty</id>
+                  <status>settled</status>
+                  <type>sale</type>
+                  <currency-iso-code>USD</currency-iso-code>
+                  <amount>100.00</amount>
+                  <merchant-account-id>fakeuseridB</merchant-account-id>
+                  <order-id>order_id</order-id>
+                  <created-at type="datetime">2015-03-25T23:48:26Z</created-at>
+                  <updated-at type="datetime">2015-03-25T23:48:26Z</updated-at>
+                  <customer>
+                    <id nil="true"/>
+                    <first-name>Drew</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <email>drew@example.com</email>
+                    <website>http://www.example.com</website>
+                    <phone>312-555-1234</phone>
+                    <fax nil="true"/>
+                  </customer>
+                  <billing>
+                    <id nil="true"/>
+                    <first-name>Paul</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <street-address>1 E Main St</street-address>
+                    <extended-address>Suite 403</extended-address>
+                    <locality nil="true"/>
+                    <region>IL</region>
+                    <postal-code>60622</postal-code>
+                    <country-name>United States of America</country-name>
+                    <country-code-alpha2>US</country-code-alpha2>
+                    <country-code-alpha3>USA</country-code-alpha3>
+                    <country-code-numeric>840</country-code-numeric>
+                  </billing>
+                  <refund-id nil="true"/>
+                  <refund-ids type="array"/>
+                  <refunded-transaction-id nil="true"/>
+                  <settlement-batch-id>2015-03-26_fakeuseridB</settlement-batch-id>
+                  <shipping>
+                    <id nil="true"/>
+                    <first-name>Jen</first-name>
+                    <last-name>Smith</last-name>
+                    <company>Braintree</company>
+                    <street-address>1 E 1st St</street-address>
+                    <extended-address>Suite 403</extended-address>
+                    <locality nil="true"/>
+                    <region>IL</region>
+                    <postal-code>60103</postal-code>
+                    <country-name>United States of America</country-name>
+                    <country-code-alpha2>US</country-code-alpha2>
+                    <country-code-alpha3>USA</country-code-alpha3>
+                    <country-code-numeric>840</country-code-numeric>
+                  </shipping>
+                  <custom-fields/>
+                  <avs-error-response-code nil="true"/>
+                  <avs-postal-code-response-code>M</avs-postal-code-response-code>
+                  <avs-street-address-response-code>M</avs-street-address-response-code>
+                  <cvv-response-code>M</cvv-response-code>
+                  <gateway-rejection-reason nil="true"/>
+                  <processor-authorization-code>45QGYL</processor-authorization-code>
+                  <processor-response-code>1000</processor-response-code>
+                  <processor-response-text>Approved</processor-response-text>
+                  <additional-processor-response nil="true"/>
+                  <voice-referral-number nil="true"/>
+                  <purchase-order-number nil="true"/>
+                  <tax-amount nil="true"/>
+                  <tax-exempt type="boolean">false</tax-exempt>
+                  <credit-card>
+                    <token nil="true"/>
+                    <bin>401288</bin>
+                    <last-4>1881</last-4>
+                    <card-type>Visa</card-type>
+                    <expiration-month>12</expiration-month>
+                    <expiration-year>2020</expiration-year>
+                    <customer-location>US</customer-location>
+                    <cardholder-name nil="true"/>
+                    <image-url>https://assets.braintreegateway.com/payment_method_logo/visa.png?environment=sandbox</image-url>
+                    <unique-number-identifier nil="true"/>
+                    <prepaid>No</prepaid>
+                    <healthcare>Unknown</healthcare>
+                    <debit>Unknown</debit>
+                    <durbin-regulated>Unknown</durbin-regulated>
+                    <commercial>Unknown</commercial>
+                    <payroll>Unknown</payroll>
+                    <issuing-bank>Unknown</issuing-bank>
+                    <country-of-issuance>USA</country-of-issuance>
+                    <product-id>Unknown</product-id>
+                    <venmo-sdk type="boolean">false</venmo-sdk>
+                  </credit-card>
+                  <status-history type="array">
+                    <status-event>
+                      <timestamp type="datetime">2015-03-25T23:48:26Z</timestamp>
+                      <status>authorized</status>
+                      <amount>100.00</amount>
+                      <user>rubylanenicci</user>
+                      <transaction-source>api</transaction-source>
+                    </status-event>
+                    <status-event>
+                      <timestamp type="datetime">2015-03-25T23:48:26Z</timestamp>
+                      <status>submitted_for_settlement</status>
+                      <amount>100.00</amount>
+                      <user>rubylanenicci</user>
+                      <transaction-source>api</transaction-source>
+                    </status-event>
+                    <status-event>
+                      <timestamp type="datetime">2015-03-26T08:53:51Z</timestamp>
+                      <status>settled</status>
+                      <amount>100.00</amount>
+                      <user nil="true"/>
+                      <transaction-source></transaction-source>
+                    </status-event>
+                  </status-history>
+                  <plan-id nil="true"/>
+                  <subscription-id nil="true"/>
+                  <subscription>
+                    <billing-period-end-date nil="true"/>
+                    <billing-period-start-date nil="true"/>
+                  </subscription>
+                  <add-ons type="array"/>
+                  <discounts type="array"/>
+                  <descriptor>
+                    <name nil="true"/>
+                    <phone nil="true"/>
+                    <url nil="true"/>
+                  </descriptor>
+                  <recurring type="boolean">false</recurring>
+                  <channel>MyShoppingCartProvider</channel>
+                  <service-fee-amount>3.00</service-fee-amount>
+                  <escrow-status nil="true"/>
+                  <disbursement-details>
+                    <disbursement-date nil="true"/>
+                    <settlement-amount nil="true"/>
+                    <settlement-currency-iso-code nil="true"/>
+                    <settlement-currency-exchange-rate nil="true"/>
+                    <funds-held nil="true"/>
+                    <success nil="true"/>
+                  </disbursement-details>
+                  <disputes type="array"/>
+                  <payment-instrument-type>credit_card</payment-instrument-type>
+                  <processor-settlement-response-code></processor-settlement-response-code>
+                  <processor-settlement-response-text></processor-settlement-response-text>
+                </transaction>
+            }]
+			# Canned response from Braintree >>> 
+        }
+    } {
+        rl_braintree create bt \
+            -sandbox 1 \
+            -merchant_id $::merchant_id \
+            -public_key $::public_key \
+            -private_key $::private_key
+
+        set res [dict get [bt transaction find $base_data] id]
+    }
+} -cleanup {
+    cleanup
+} -result "hxdfty"
+
+#>>>
+
+
+return
+
+# # vim: ft=tcl foldmethod=marker foldmarker=<<<,>>> ts=4 shiftwidth=4
