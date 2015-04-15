@@ -1,4 +1,4 @@
-Ruby Lane Braintree Tcl K
+Ruby Lane Braintree Tcl SDK
 ===========================
 
 This repository contains the tcl package, that enables integration to
