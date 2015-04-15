@@ -10,7 +10,7 @@ Marketplace solution, the full details of which are available at
 https://developers.braintreepayments.com/javascript+ruby/guides/marketplace/overview.
 
 To start using Braintree, you may sign up for a sandbox profile at
-https: //www.braintreepayments.com/get-started
+https://www.braintreepayments.com/get-started
 
 Features Included
 -----------------
