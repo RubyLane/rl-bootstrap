@@ -1,4 +1,4 @@
-Ruby Lane Braintree Tcl SDK
+Ruby Lane Braintree Tcl K
 ===========================
 
 This repository contains the tcl package, that enables integration to
@@ -164,7 +164,7 @@ set result [bt merchant_account create {
 ##Update
 
 To update an existing merchant account, simple change the applicable
-field and pass the same data through. At this point, the 'id' of the sub
+field and pass the same data structure through. At this point, the 'id' of the sub
 merchant account is required (unlike create where it is optional), to identify which profile is being updated.
 
 ~~~tcl
@@ -199,7 +199,7 @@ To collect funds at the time of creating a transaction, you will need to
 pass the option 'submit_for_settlement' as true.
 
 **NOTE** at this point, this is required as the submit for settlement
-method (after the initial creation) has not bee finalised.
+method (after the initial creation) has not been finalised.
 
 ####Fuller example
 
