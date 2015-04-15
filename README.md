@@ -50,7 +50,7 @@ This package has a dependency on the following packages:
 Examples
 --------
 
-To initial the Braintree Gateway, create an object, passing through your
+To initialize the Braintree Gateway, create an object, passing through your
 credentials:
 
 ~~~tcl
